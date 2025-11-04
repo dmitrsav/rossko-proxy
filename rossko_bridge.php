@@ -1,153 +1,100 @@
 <?php
-/**
- * ROSSKO Bridge (single file)
- * ----------------------------------------
- * Прокси-скрипт, который принимает GET-параметры и
- * пересылает их на ваш Cloudflare Worker, добавляя заголовок X-Api-Key.
- * Возвращает JSON от воркера "как есть".
- *
- * Параметры:
- *   q            — строка поиска (обязательно)
- *   delivery_id  — ID склада/доставки (опц.)
- *   address_id   — ID адреса (опц.)
- *   demo=1       — демо-ответ локально (опц.)
- */
+// rossko_bridge.php — простой прокси к ROSSKO API
 
 header('Content-Type: application/json; charset=utf-8');
 
-// === НАСТРОЙКИ =============================================================
-// URL вашего Cloudflare Worker (БЕЗ /search/byname на конце)
-$WORKER_BASE = 'https://red-haze-b57c.saveliev2021.workers.dev';
-
-// Ваш ROSSKO API-ключ (по вашему подтверждению)
-const ROSSKO_API_KEY = 'bc7928efd745d4c6bcefaf8d4ca08059';
-
-// Таймауты
-$TIMEOUT = 12;
-$RETRIES = 2;
-// ==========================================================================
-
-// Вспомогательная функция ответа JSON и выход
-function respond($payload, $code = 200) {
-    http_response_code($code);
-    echo json_encode($payload, JSON_UNESCAPED_UNICODE);
+function fail($msg, $extra = []) {
+    http_response_code(200);
+    echo json_encode(array_merge(['ok' => false, 'error' => $msg], $extra), JSON_UNESCAPED_UNICODE);
     exit;
 }
 
-// Параметры запроса
-$q           = isset($_GET['q']) ? trim($_GET['q']) : '';
-$delivery_id = isset($_GET['delivery_id']) ? trim($_GET['delivery_id']) : '';
-$address_id  = isset($_GET['address_id'])  ? trim($_GET['address_id'])  : '';
-$demo        = isset($_GET['demo']) ? (int)$_GET['demo'] : 0;
-
-if ($demo === 1) {
-    respond([
-        'ok'   => true,
-        'demo' => true,
-        'data' => [
-            'query'      => ($q !== '' ? $q : 'масло'),
-            'deliveryId' => ($delivery_id !== '' ? $delivery_id : '000000002'),
-            'addressId'  => ($address_id  !== '' ? $address_id  : '301007'),
-            'currency'   => 'RUB',
-            'count'      => 2,
-            'items'      => [
-                [
-                    'brand'        => 'TOTAL',
-                    'article'      => 'QUARTZ-9000-5W40',
-                    'name'         => 'Моторное масло 5W-40 QUARTZ 9000 4л',
-                    'price'        => 2890,
-                    'quantity'     => 7,
-                    'deliveryDays' => 1,
-                    'deliveryId'   => ($delivery_id !== '' ? $delivery_id : '000000002'),
-                    'addressId'    => ($address_id  !== '' ? $address_id  : '301007'),
-                ],
-                [
-                    'brand'        => 'LIQUI MOLY',
-                    'article'      => 'TOP-TEC-4200-5W30',
-                    'name'         => 'Моторное масло 5W-30 Top Tec 4200 5л',
-                    'price'        => 5150,
-                    'quantity'     => 3,
-                    'deliveryDays' => 1,
-                    'deliveryId'   => ($delivery_id !== '' ? $delivery_id : '000000002'),
-                    'addressId'    => ($address_id  !== '' ? $address_id  : '301007'),
-                ]
-            ]
-        ],
-        '__note' => 'DEMO MODE (запрошено &demo=1)'
-    ]);
-}
+// 1) Параметры
+$q           = isset($_GET['q']) ? (string)$_GET['q'] : '';
+$delivery_id = isset($_GET['delivery_id']) ? (string)$_GET['delivery_id'] : '';
+$address_id  = isset($_GET['address_id']) ? (string)$_GET['address_id'] : '';
 
 if ($q === '') {
-    respond(['ok' => false, 'error' => 'Param q is required'], 400);
+    fail('Missing required param: q');
 }
 
-if (!defined('ROSSKO_API_KEY') || ROSSKO_API_KEY === '') {
-    respond([
-        'ok'    => false,
-        'error' => 'API key not set',
-        'hint'  => 'Впишите ключ в константу ROSSKO_API_KEY в начале файла.'
-    ], 500);
+// 2) Ключ берем из файла /www/api.autoc.pro/.secrets/rossko_key.php
+//    Содержимое файла:  <?php return 'ВАШ_КЛЮЧ';
+$key_file = __DIR__ . '/.secrets/rossko_key.php';
+if (!is_file($key_file)) {
+    fail('Key file not found', ['hint' => false]);
+}
+$API_KEY = include $key_file;
+if (!$API_KEY) {
+    fail('Empty API key');
 }
 
-// Сборка URL воркера
-$query = http_build_query([
+// 3) Целевой endpoint ROSSKO
+$ROSSKO_URLS = [
+    'https://b2b.rossko.ru/service/v2.1/search/byname',
+    'https://api.rossko.ru/service/v2.1/search/byname',
+    'https://b2bapi.rossko.ru/service/v2.1/search/byname'
+];
+
+// 4) Общие заголовки
+$headers = [
+    'Accept: application/json',
+    'X-Api-Key: ' . $API_KEY,
+    'User-Agent: AutocPro/1.0'
+];
+
+// 5) Параметры запроса
+$qparams = http_build_query([
     'q'           => $q,
     'delivery_id' => $delivery_id,
-    'address_id'  => $address_id
-]);
-$workerUrl = rtrim($WORKER_BASE, '/') . '/search/byname?' . $query;
+    'address_id'  => $address_id,
+], '', '&', PHP_QUERY_RFC3986);
 
-// cURL с ретраями
-$attempt = 0;
-$last = null;
-while ($attempt <= $RETRIES) {
-    $attempt++;
-    $ch = curl_init($workerUrl);
+// 6) Пробуем поочередно несколько хостов
+$diag = [];
+foreach ($ROSSKO_URLS as $base) {
+    $url = $base . '?' . $qparams;
+
+    $ch = curl_init($url);
     curl_setopt_array($ch, [
         CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_HTTPHEADER     => $headers,
+        CURLOPT_TIMEOUT        => 8,
+        CURLOPT_CONNECTTIMEOUT => 4,
+        CURLOPT_SSL_VERIFYPEER => true,
+        CURLOPT_SSL_VERIFYHOST => 2,
         CURLOPT_FOLLOWLOCATION => true,
-        CURLOPT_CONNECTTIMEOUT => $TIMEOUT,
-        CURLOPT_TIMEOUT        => $TIMEOUT,
-        CURLOPT_HTTPHEADER     => [
-            'Accept: application/json',
-            'Content-Type: application/json; charset=utf-8',
-            'X-Api-Key: ' . ROSSKO_API_KEY,
-        ],
-        CURLOPT_IPRESOLVE      => CURL_IPRESOLVE_V4,
-        CURLOPT_USERAGENT      => 'rossko-bridge-php/1.0',
+        CURLOPT_MAXREDIRS      => 3,
     ]);
+
     $body = curl_exec($ch);
-    $errn = curl_errno($ch);
-    $info = curl_getinfo($ch);
+    $errno = curl_errno($ch);
+    $err   = curl_error($ch);
+    $code  = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $ctype = (string)curl_getinfo($ch, CURLINFO_CONTENT_TYPE);
     curl_close($ch);
 
-    // Успешный ответ (вернём как есть, даже 4xx)
-    if ($errn === 0 && isset($info['http_code']) && $info['http_code'] >= 200 && $info['http_code'] < 500) {
-        http_response_code($info['http_code']);
+    // Если пришел JSON — сразу отдаем
+    if ($errno === 0 && $code >= 200 && $code < 300 && stripos($ctype, 'json') !== false) {
+        http_response_code(200);
         echo $body;
         exit;
     }
 
-    $last = [
-        'errno' => $errn,
-        'http'  => $info['http_code'] ?? 0,
-        'info'  => $info,
-        'body'  => $body,
-    ];
-
-    if ($errn !== 0 || ($info['http_code'] >= 500 && $info['http_code'] <= 599)) {
-        usleep(250000 * $attempt); // backoff
-        continue;
+    // Сохраняем диагностику
+    $snip = '';
+    if (is_string($body)) {
+        $snip = mb_substr(preg_replace('~\s+~u', ' ', $body), 0, 300);
     }
-    break;
+    $diag[] = [
+        'url'   => $url,
+        'http'  => $code,
+        'errno' => $errno,
+        'err'   => $err,
+        'ctype' => $ctype,
+        'snip'  => $snip,
+    ];
 }
 
-respond([
-    'ok'   => false,
-    'error'=> 'Upstream error',
-    'hint' => 'Сетевая/временная ошибка у ROSSKO (или их защита блокирует egress-IP). Попробуйте повторить запрос позже.',
-    'diagnostic' => [
-        'url'  => $workerUrl,
-        'last' => $last,
-    ],
-], 502);
+// 7) Если все попытки не дали валидный JSON
+fail('Upstream returned non-JSON', ['diag' => $diag]);
