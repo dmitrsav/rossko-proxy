@@ -1,15 +1,9 @@
 {
   "version": 2,
   "builds": [
-    {
-      "src": "rossko_bridge.php",
-      "use": "@vercel/php"
-    }
+    { "src": "rossko_bridge.php", "use": "@vercel/php" }
   ],
   "routes": [
-    {
-      "src": "^/api/rossko$",
-      "dest": "/rossko_bridge.php"
-    }
+    { "src": "/api/rossko", "dest": "/rossko_bridge.php" }
   ]
 }
