@@ -8,8 +8,8 @@
   ],
   "routes": [
     {
-      "src": "/(.*)",
-      "dest": "rossko_bridge.php"
+      "src": "^/api/rossko$",
+      "dest": "/rossko_bridge.php"
     }
   ]
 }
