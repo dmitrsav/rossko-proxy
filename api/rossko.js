@@ -1,46 +1,57 @@
+// api/rossko.js  — Node.js Serverless Function на Vercel
 export default async function handler(req, res) {
   try {
-    const { q = "", delivery_id = "", address_id = "" } = req.query;
+    // Разбираем входные параметры
+    const { q = '', delivery_id = '', address_id = '' } = req.query;
 
-    if (!process.env.ROSSKO_API_KEY) {
-      return res.status(500).json({ ok: false, error: "Missing ROSSKO_API_KEY" });
-    }
-    if (!q || !delivery_id || !address_id) {
-      return res.status(400).json({ ok: false, error: "q, delivery_id, address_id are required" });
+    if (!q) {
+      return res.status(400).json({ ok: false, error: "Параметр q обязателен" });
     }
 
-    const url = `https://api.rossko.ru/service/v2.1/search/byname?q=${encodeURIComponent(q)}&delivery_id=${encodeURIComponent(delivery_id)}&address_id=${encodeURIComponent(address_id)}`;
+    // Ключ из переменных окружения Vercel
+    const API_KEY = process.env.ROSSKO_API_KEY;
+    if (!API_KEY) {
+      return res.status(500).json({ ok: false, error: "Нет ROSSKO_API_KEY" });
+    }
 
-    const upstream = await fetch(url, {
-      headers: {
-        "User-Agent": "TripsterApp/1.0",
-        "Accept": "application/json",
-        "X-Api-Key": process.env.ROSSKO_API_KEY,
-      },
+    // ВНИМАНИЕ: укажите правильный URL их API (пример! замените на тот, что у вас в документации)
+    const upstreamUrl = new URL('https://api.rossko.ru/service/v2/search'); // пример
+    upstreamUrl.searchParams.set('q', q);
+    if (delivery_id) upstreamUrl.searchParams.set('delivery_id', delivery_id);
+    if (address_id)  upstreamUrl.searchParams.set('address_id', address_id);
+
+    const headers = {
+      'Accept': 'application/json',
+      'User-Agent': 'rossko-proxy (+vercel)',
+      // подставьте нужный заголовок авторизации из их документации:
+      'Authorization': `Bearer ${API_KEY}`,
+      // либо, если у них другой формат:
+      // 'X-Api-Key': API_KEY,
+    };
+
+    const r = await fetch(upstreamUrl.toString(), {
+      method: 'GET',
+      headers,
+      // чтобы не кешировалось Vercel’ем
+      cache: 'no-store',
+      // на всякий случай уменьшим риск обрыва
+      redirect: 'follow',
     });
 
-    const ctype = upstream.headers.get("content-type") || "";
-    const bodyText = await upstream.text();
+    const text = await r.text();
 
-    if (!upstream.ok) {
-      return res.status(502).json({
+    // Если ответ не JSON — вернём диагностический блок
+    try {
+      const data = JSON.parse(text);
+      return res.status(r.ok ? 200 : r.status).json(data);
+    } catch {
+      return res.status(r.status || 502).json({
         ok: false,
-        error: `Upstream HTTP ${upstream.status}`,
-        diag: { url, status: upstream.status, body: bodyText.slice(0, 300) },
+        error: 'Upstream returned non-JSON',
+        diag: { ctype: r.headers.get('content-type'), snip: text.slice(0, 300) }
       });
     }
-
-    if (!ctype.includes("application/json")) {
-      return res.status(502).json({
-        ok: false,
-        error: "Upstream returned non-JSON",
-        diag: { ctype, snip: bodyText.slice(0, 300) },
-      });
-    }
-
-    res.setHeader("Content-Type", "application/json; charset=utf-8");
-    res.status(200).send(bodyText);
   } catch (e) {
-    res.status(500).json({ ok: false, error: String(e) });
+    return res.status(502).json({ ok: false, error: String(e) });
   }
 }
