@@ -1,68 +1,61 @@
-// /api/rossko.js
-// Принудительно направляем все fetch через прокси из PROXY_URL (undici ProxyAgent)
-import { ProxyAgent, setGlobalDispatcher } from 'undici';
-
-const proxyUrl = process.env.PROXY_URL || '';
-if (proxyUrl) {
-  try { setGlobalDispatcher(new ProxyAgent(proxyUrl)); } catch (e) { /* ignore */ }
-}
+// api/rossko.js
+import { HttpsProxyAgent } from 'https-proxy-agent';
 
 export default async function handler(req, res) {
+  const { q = '', delivery_id = '', address_id = '', debug } = req.query;
+
   try {
-    const key = process.env.ROSSKO_API_KEY || '';
-    if (!key) return res.status(500).json({ ok: false, error: 'ROSSKO_API_KEY is missing' });
+    const API_KEY = process.env.ROSSKO_API_KEY;
+    const PROXY_URL = process.env.PROXY_URL;
 
-    const q = (req.query.q || '').toString().trim();
-    const delivery_id = (req.query.delivery_id || '000000002').toString();
-    const address_id  = (req.query.address_id  || '301007').toString();
+    if (!API_KEY) {
+      return res.status(500).json({ ok: false, error: 'ROSSKO_API_KEY is missing' });
+    }
+    if (!PROXY_URL) {
+      return res.status(500).json({ ok: false, error: 'PROXY_URL is missing' });
+    }
 
-    if (!q) return res.status(400).json({ ok: false, error: 'Param "q" is required' });
+    const agent = new HttpsProxyAgent(PROXY_URL);
 
-    // Пример end-point'а (скажу прямо: у Росско несколько версий; этот вариант обычно работает)
-    const url = new URL('https://api.rossko.ru/v2/public/guest/search');
-    url.searchParams.set('text', q);
-    url.searchParams.set('delivery_id', delivery_id);
-    url.searchParams.set('address_id', address_id);
+    // Пример эндпоинта (замените на ваш фактический URL РОССКО)
+    const url = `https://api.rossko.ru/service/v2.1/goods.get?text=${encodeURIComponent(q)}&delivery_id=${encodeURIComponent(delivery_id)}&address_id=${encodeURIComponent(address_id)}`;
 
     const r = await fetch(url, {
       method: 'GET',
       headers: {
+        'X-Api-Key': API_KEY,
         'Accept': 'application/json',
-        'X-Api-Key': key
-      }
-      // таймаут можно задать через AbortController при желании
+      },
+      agent,
+      cache: 'no-store',
     });
 
     const ctype = r.headers.get('content-type') || '';
     const raw = await r.text();
 
-    if (!r.ok) {
-      return res.status(502).json({
+    // Если API вернул не JSON — покажем срез ответа
+    if (!ctype.includes('application/json')) {
+      return res.status(r.status).json({
         ok: false,
         status: r.status,
         ctype,
-        body: raw.slice(0, 1200)
+        snip: raw.slice(0, 400),
+        hint: 'РОССКО вернул не JSON (скорее всего блок/капча/HTML). Проверьте IP прокси и доступы.',
+        ...(debug ? { debug: { url, proxy: PROXY_URL.replace(/:\/\/[^@]+@/, '://***:***@') } } : {}),
       });
     }
 
-    // Иногда Росско отдаёт HTML при блокировке — ловим это
-    if (!/application\/json/i.test(ctype)) {
-      return res.status(200).json({
-        ok: true,
-        nonjson: true,
-        ctype,
-        snip: raw.slice(0, 1200)
-      });
-    }
+    const data = JSON.parse(raw);
+    return res.status(r.ok ? 200 : r.status).json({
+      ok: r.ok,
+      status: r.status,
+      data,
+      ...(debug ? { debug: { url, proxy: PROXY_URL.replace(/:\/\/[^@]+@/, '://***:***@') } } : {}),
+    });
 
-    let data;
-    try { data = JSON.parse(raw); }
-    catch {
-      return res.status(200).json({ ok: true, nonjson: true, ctype, snip: raw.slice(0, 1200) });
-    }
-
-    return res.status(200).json({ ok: true, data });
   } catch (e) {
+    // Лог в логи Vercel, а клиенту — чистый текст
+    console.error('ROSSKO handler error:', e);
     return res.status(500).json({ ok: false, error: String(e) });
   }
 }
