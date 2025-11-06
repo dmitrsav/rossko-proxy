@@ -1,15 +1,25 @@
-export default async function handler(req, res) {
-  const url = req.query.url || 'https://api.rossko.ru/';
+// api/check.js
+const { ProxyAgent, fetch } = require('undici');
+
+module.exports = async (req, res) => {
   try {
-    const r = await fetch(url, { cache: 'no-store' });
-    const text = await r.text();
+    const url = req.query.url;
+    if (!url) return res.status(400).json({ ok: false, error: 'No url' });
+
+    const proxyUrl = process.env.PROXY_URL || '';
+    const dispatcher = proxyUrl ? new ProxyAgent(proxyUrl) : undefined;
+
+    const r = await fetch(url, { dispatcher });
+    const ctype = r.headers.get('content-type') || '';
+    const body = await r.text();
+
     res.status(200).json({
       ok: true,
       status: r.status,
-      ctype: r.headers.get('content-type'),
-      snip: text.slice(0, 200)
+      ctype,
+      snip: body.slice(0, 200)
     });
   } catch (e) {
-    res.status(502).json({ ok: false, error: String(e) });
+    res.status(500).json({ ok: false, error: String(e) });
   }
-}
+};
