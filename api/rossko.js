@@ -1,35 +1,41 @@
-// /api/rossko.js
-const fetch = require('node-fetch');
-const HttpsProxyAgent = require('https-proxy-agent');
+// api/rossko.js
+const { ProxyAgent, fetch } = require('undici');
 
 module.exports = async (req, res) => {
   try {
-    const { q, delivery_id, address_id } = req.query;
-    const apiKey = process.env.ROSSKO_API_KEY;
-    const proxyUrl = process.env.PROXY_URL;
+    const { q = '', delivery_id = '', address_id = '' } = req.query;
 
-    if (!apiKey) return res.status(500).json({ ok: false, error: 'Missing ROSSKO_API_KEY' });
-    if (!proxyUrl) return res.status(500).json({ ok: false, error: 'Missing PROXY_URL' });
-
-    const agent = new HttpsProxyAgent(proxyUrl);
-
-    const url = 'https://api.rossko.ru/…' /* здесь ваш конечный URL с q, delivery_id, address_id */;
-    const r = await fetch(url, {
-      method: 'GET', // или POST по вашей схеме
-      headers: { 'Authorization': `Bearer ${apiKey}` },
-      agent
-    });
-
-    // Если РОССКО отвечает HTML (блокировка), аккуратно вернём статус/сниппет
-    const ctype = r.headers.get('content-type') || '';
-    if (!ctype.includes('json')) {
-      const snip = (await r.text()).slice(0, 500);
-      return res.status(200).json({ ok: true, status: r.status, ctype, snip });
+    if (!process.env.ROSSKO_API_KEY) {
+      return res.status(500).json({ ok: false, error: 'No ROSSKO_API_KEY' });
     }
 
-    const data = await r.json();
-    res.status(200).json({ ok: true, data });
+    // Агент прокси берём из переменной окружения PROXY_URL (формат http://user:pass@ip:port)
+    const proxyUrl = process.env.PROXY_URL || '';
+    const dispatcher = proxyUrl ? new ProxyAgent(proxyUrl) : undefined;
+
+    const url = `https://api.rossko.ru/v2/search?text=${encodeURIComponent(q)}&delivery_id=${encodeURIComponent(delivery_id)}&address_id=${encodeURIComponent(address_id)}`;
+
+    const r = await fetch(url, {
+      dispatcher,                            // вот сюда подставляем прокси
+      headers: {
+        'Authorization': `Bearer ${process.env.ROSSKO_API_KEY}`,
+        'Accept': 'application/json'
+      }
+    });
+
+    const ctype = r.headers.get('content-type') || '';
+    const txt = await r.text();
+
+    // Rossko иногда может отдать HTML-страницу ошибки — отловим это красиво
+    if (!r.ok) {
+      return res.status(r.status).json({ ok: false, status: r.status, ctype, body: txt.slice(0, 500) });
+    }
+    if (!ctype.includes('application/json')) {
+      return res.status(502).json({ ok: false, error: 'Upstream returned non-JSON', ctype, snip: txt.slice(0, 500) });
+    }
+
+    return res.status(200).send(txt);       // уже текст JSON — отдаем как есть
   } catch (e) {
-    res.status(500).json({ ok: false, error: String(e) });
+    return res.status(500).json({ ok: false, error: String(e) });
   }
 };
