@@ -4,18 +4,15 @@ const { HttpsProxyAgent } = require('https-proxy-agent');
 const { PROXY_URL, ROSSKO_API_KEY } = process.env;
 
 if (!ROSSKO_API_KEY) {
+  // если забудешь переменную — увидишь понятную ошибку в логах
   throw new Error('ROSSKO_API_KEY is not set');
 }
 
-let agent = null;
-if (PROXY_URL) {
-  agent = new HttpsProxyAgent(PROXY_URL);
-}
+const agent = PROXY_URL ? new HttpsProxyAgent(PROXY_URL) : null;
 
 module.exports = async (req, res) => {
   try {
     const { q } = req.query;
-
     if (!q) {
       res.status(400).json({ ok: false, error: 'Missing q' });
       return;
