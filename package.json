@@ -2,7 +2,9 @@
   "name": "rossko-proxy",
   "version": "1.0.0",
   "private": true,
-  "engines": { "node": "18.x" },
+  "engines": {
+    "node": "18.x"
+  },
   "dependencies": {
     "node-fetch": "^2.7.0",
     "https-proxy-agent": "^5.0.1"
