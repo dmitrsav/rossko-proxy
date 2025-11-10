@@ -51,7 +51,6 @@ module.exports = async (req, res) => {
     const contentType = response.headers.get('content-type') || '';
     const text = await response.text();
 
-    // Если Rossko отдал JSON — пробуем распарсить и вернуть как есть
     if (contentType.includes('application/json')) {
       try {
         const json = JSON.parse(text);
@@ -65,7 +64,6 @@ module.exports = async (req, res) => {
       }
     }
 
-    // Иначе шлём снэп для отладки
     return res.status(502).json({
       ok: false,
       status: response.status,
