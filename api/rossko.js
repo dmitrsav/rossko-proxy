@@ -1,89 +1,78 @@
+// api/rossko.js
+
 const fetch = require('node-fetch');
 const { HttpsProxyAgent } = require('https-proxy-agent');
 
-const ROSSKO_API_URL = 'https://api.rossko.ru/service/v2';
+const ROSS_API_URL = 'https://api.rossko.ru/service/v2/search';
 
-module.exports = async (req, res) => {
+module.exports = async function handler(req, res) {
+  const { q, delivery_id, address_id } = req.query;
+
+  if (!q) {
+    return res
+      .status(400)
+      .json({ ok: false, error: 'Отсутствует обязательный параметр q' });
+  }
+
+  const proxyUrl = process.env.PROXY_URL || null;
+
+  // если прокси указан — используем его
+  const agent = proxyUrl ? new HttpsProxyAgent(proxyUrl) : undefined;
+
+  // собираем URL к Росско
+  const url =
+    ROSS_API_URL +
+    '?text=' +
+    encodeURIComponent(q) +
+    (delivery_id ? '&delivery_id=' + encodeURIComponent(delivery_id) : '') +
+    (address_id ? '&address_id=' + encodeURIComponent(address_id) : '');
+
   try {
-    console.log('rossko handler start');
+    const response = await fetch(url, {
+      agent,
+      timeout: 15000,
+    });
 
-    const apiKey = process.env.ROSSKO_API_KEY;
-    if (!apiKey) {
-      console.error('No ROSSKO_API_KEY');
-      return res
-        .status(500)
-        .json({ ok: false, error: 'ROSSKO_API_KEY is not set' });
-    }
+    const ctype = response.headers.get('content-type') || '';
+    const text = await response.text();
 
-    const proxyUrl = process.env.PROXY_URL || '';
-    let agent;
-
-    if (proxyUrl) {
-      try {
-        agent = new HttpsProxyAgent(proxyUrl);
-      } catch (e) {
-        console.error('Bad PROXY_URL:', e);
-        return res
-          .status(500)
-          .json({ ok: false, error: 'Invalid PROXY_URL in environment' });
-      }
-    }
-
-    const { q, delivery_id, address_id } = req.query;
-
-    if (!q || !delivery_id || !address_id) {
-      return res.status(400).json({
+    // если Росско ответил ошибкой — покажем, что именно
+    if (!response.ok) {
+      return res.status(200).json({
         ok: false,
-        error: 'Missing q, delivery_id or address_id',
+        status: response.status,
+        ctype,
+        snip: text.slice(0, 500),
       });
     }
 
-    const url =
-      `${ROSSKO_API_URL}/search` +
-      `?text=${encodeURIComponent(q)}` +
-      `&delivery_id=${encodeURIComponent(delivery_id)}` +
-      `&address_id=${encodeURIComponent(address_id)}`;
-
-    console.log('Request URL:', url);
-
-    const response = await fetch(url, {
-      method: 'GET',
-      headers: {
-        Authorization: apiKey,
-      },
-      ...(agent ? { agent } : {}),
-    });
-
-    const contentType = response.headers.get('content-type') || '';
-    const text = await response.text();
-
-    console.log('ROSSKO status', response.status, contentType);
-
-    if (contentType.includes('application/json')) {
+    // если это JSON — отдадим как JSON
+    if (ctype.includes('application/json')) {
       try {
-        const json = JSON.parse(text);
-        return res.status(response.status).json(json);
+        return res.status(200).json(JSON.parse(text));
       } catch (e) {
-        console.error('JSON parse error:', e);
-        return res.status(502).json({
-          ok: false,
-          error: 'ROSSKO returned invalid JSON',
-          body: text.slice(0, 1000),
+        // вдруг там кривой json
+        return res.status(200).json({
+          ok: true,
+          status: response.status,
+          ctype,
+          snip: text.slice(0, 500),
         });
       }
     }
 
-    return res.status(502).json({
-      ok: false,
+    // иначе вернём кусок ответа для дебага
+    return res.status(200).json({
+      ok: true,
       status: response.status,
-      ctype: contentType,
-      body: text.slice(0, 1000),
+      ctype,
+      snip: text.slice(0, 500),
     });
   } catch (err) {
-    console.error('Handler error:', err);
-    return res.status(500).json({
+    // сюда как раз падают ошибки вида "Client network socket disconnected…"
+    return res.status(200).json({
       ok: false,
-      error: err.message || 'Internal Server Error',
+      error: String(err && err.message ? err.message : err),
     });
   }
 };
