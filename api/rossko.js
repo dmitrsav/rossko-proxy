@@ -5,13 +5,18 @@ const ROSSKO_API_URL = 'https://api.rossko.ru/service/v2';
 
 module.exports = async (req, res) => {
   try {
+    console.log('rossko handler start');
+
     const apiKey = process.env.ROSSKO_API_KEY;
     if (!apiKey) {
-      return res.status(500).json({ ok: false, error: 'ROSSKO_API_KEY is not set' });
+      console.error('No ROSSKO_API_KEY');
+      return res
+        .status(500)
+        .json({ ok: false, error: 'ROSSKO_API_KEY is not set' });
     }
 
     const proxyUrl = process.env.PROXY_URL || '';
-    let agent = undefined;
+    let agent;
 
     if (proxyUrl) {
       try {
@@ -39,11 +44,12 @@ module.exports = async (req, res) => {
       `&delivery_id=${encodeURIComponent(delivery_id)}` +
       `&address_id=${encodeURIComponent(address_id)}`;
 
+    console.log('Request URL:', url);
+
     const response = await fetch(url, {
       method: 'GET',
       headers: {
-        'Authorization': apiKey,
-        'Content-Type': 'application/json',
+        Authorization: apiKey,
       },
       ...(agent ? { agent } : {}),
     });
@@ -51,15 +57,18 @@ module.exports = async (req, res) => {
     const contentType = response.headers.get('content-type') || '';
     const text = await response.text();
 
+    console.log('ROSSKO status', response.status, contentType);
+
     if (contentType.includes('application/json')) {
       try {
         const json = JSON.parse(text);
         return res.status(response.status).json(json);
       } catch (e) {
+        console.error('JSON parse error:', e);
         return res.status(502).json({
           ok: false,
           error: 'ROSSKO returned invalid JSON',
-          body: text.slice(0, 4000),
+          body: text.slice(0, 1000),
         });
       }
     }
@@ -68,7 +77,7 @@ module.exports = async (req, res) => {
       ok: false,
       status: response.status,
       ctype: contentType,
-      snip: text.slice(0, 4000),
+      body: text.slice(0, 1000),
     });
   } catch (err) {
     console.error('Handler error:', err);
