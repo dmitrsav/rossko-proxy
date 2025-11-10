@@ -1,25 +1,34 @@
-// api/check.js
-const { ProxyAgent, fetch } = require('undici');
+const fetch = require('node-fetch');
+const { HttpsProxyAgent } = require('https-proxy-agent');
+
+const { PROXY_URL } = process.env;
+const agent = PROXY_URL ? new HttpsProxyAgent(PROXY_URL) : null;
 
 module.exports = async (req, res) => {
   try {
-    const url = req.query.url;
-    if (!url) return res.status(400).json({ ok: false, error: 'No url' });
+    const { url } = req.query;
+    if (!url) {
+      res.status(400).json({ ok: false, error: 'Missing url' });
+      return;
+    }
 
-    const proxyUrl = process.env.PROXY_URL || '';
-    const dispatcher = proxyUrl ? new ProxyAgent(proxyUrl) : undefined;
+    const response = await fetch(url, {
+      agent: agent || undefined,
+      timeout: 10000
+    });
 
-    const r = await fetch(url, { dispatcher });
-    const ctype = r.headers.get('content-type') || '';
-    const body = await r.text();
+    const text = await response.text();
 
     res.status(200).json({
       ok: true,
-      status: r.status,
-      ctype,
-      snip: body.slice(0, 200)
+      status: response.status,
+      ctype: response.headers.get('content-type') || null,
+      snip: text.slice(0, 4000)
     });
   } catch (e) {
-    res.status(500).json({ ok: false, error: String(e) });
+    res.status(200).json({
+      ok: false,
+      error: String(e.message || e)
+    });
   }
 };
