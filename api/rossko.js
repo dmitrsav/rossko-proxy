@@ -1,54 +1,40 @@
 const fetch = require('node-fetch');
 const { HttpsProxyAgent } = require('https-proxy-agent');
 
+const API_URL = 'https://api.rossko.ru/service/v2/search';
 const API_KEY = process.env.ROSSKO_API_KEY;
-const proxyUrl = process.env.PROXY_URL;
+const PROXY_URL = process.env.PROXY_URL;
 
 module.exports = async (req, res) => {
   try {
+    const { q = '', delivery_id = '', address_id = '' } = req.query;
+
     if (!API_KEY) {
-      return res.status(500).json({ ok: false, error: 'ROSSKO_API_KEY is not set' });
+      throw new Error('ROSSKO_API_KEY is not set');
     }
 
-    const q = req.query.q || '';
-    const delivery_id = req.query.delivery_id || '';
-    const address_id = req.query.address_id || '';
+    const url =
+      `${API_URL}?text=${encodeURIComponent(q)}` +
+      `&delivery_id=${encodeURIComponent(delivery_id || '')}` +
+      `&address_id=${encodeURIComponent(address_id || '')}`;
 
-    const url = `https://api.rossko.ru/service/v2/search?text=${encodeURIComponent(
-      q
-    )}&delivery_id=${encodeURIComponent(delivery_id)}&address_id=${encodeURIComponent(address_id)}`;
+    const options = {
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+        'Api-Key': API_KEY,
+      },
+    };
 
-    const headers = { 'X-Api-Key': API_KEY };
-    const options = { headers };
-
-    if (proxyUrl) {
-      options.agent = new HttpsProxyAgent(proxyUrl);
+    if (PROXY_URL) {
+      options.agent = new HttpsProxyAgent(PROXY_URL);
     }
 
-    const r = await fetch(url, options);
-    const text = await r.text();
+    const response = await fetch(url, options);
+    const body = await response.text();
 
-    if (!r.ok) {
-      return res.status(200).json({
-        ok: false,
-        status: r.status,
-        error: text || `ROSSKO returned ${r.status}`
-      });
-    }
-
-    let data;
-    try {
-      data = JSON.parse(text);
-    } catch {
-      return res.status(200).json({
-        ok: false,
-        error: 'ROSSKO response is not JSON',
-        raw: text.slice(0, 200)
-      });
-    }
-
-    res.status(200).json({ ok: true, data });
-  } catch (e) {
-    res.status(200).json({ ok: false, error: e.message });
+    res.status(response.status).send(body);
+  } catch (err) {
+    res.status(500).json({ ok: false, error: String(err) });
   }
 };
