@@ -1,30 +1,26 @@
-const fetch = require('node-fetch');
-const { HttpsProxyAgent } = require('https-proxy-agent');
+import { HttpsProxyAgent } from 'https-proxy-agent';
+import fetch from 'node-fetch';
 
-const proxyUrl = process.env.PROXY_URL;
+const PROXY_URL = process.env.PROXY_URL;
+const agent = PROXY_URL ? new HttpsProxyAgent(PROXY_URL) : null;
 
-module.exports = async (req, res) => {
+export default async function handler(req, res) {
   try {
-    const url = req.query.url;
+    const { url } = req.query;
     if (!url) {
-      return res.status(400).json({ ok: false, error: 'Missing url param' });
+      return res.status(400).json({ ok: false, error: 'Missing url' });
     }
 
-    const options = {};
-    if (proxyUrl) {
-      options.agent = new HttpsProxyAgent(proxyUrl);
-    }
-
-    const r = await fetch(url, options);
-    const text = await r.text();
+    const r = await fetch(url, { agent: agent || undefined });
+    const snip = (await r.text()).slice(0, 200);
 
     res.status(200).json({
-      ok: true,
+      ok: r.ok,
       status: r.status,
-      ctype: r.headers.get('content-type'),
-      snip: text.slice(0, 200)
+      ctype: r.headers.get('content-type') || '',
+      snip,
     });
   } catch (e) {
-    res.status(200).json({ ok: false, error: e.message });
+    res.status(200).json({ ok: false, error: String(e) });
   }
-};
+}
