@@ -1,46 +1,54 @@
 const fetch = require('node-fetch');
 const { HttpsProxyAgent } = require('https-proxy-agent');
 
-const { PROXY_URL, ROSSKO_API_KEY } = process.env;
-
-if (!ROSSKO_API_KEY) {
-  // если забудешь переменную — увидишь понятную ошибку в логах
-  throw new Error('ROSSKO_API_KEY is not set');
-}
-
-const agent = PROXY_URL ? new HttpsProxyAgent(PROXY_URL) : null;
+const API_KEY = process.env.ROSSKO_API_KEY;
+const proxyUrl = process.env.PROXY_URL;
 
 module.exports = async (req, res) => {
   try {
-    const { q } = req.query;
-    if (!q) {
-      res.status(400).json({ ok: false, error: 'Missing q' });
-      return;
+    if (!API_KEY) {
+      return res.status(500).json({ ok: false, error: 'ROSSKO_API_KEY is not set' });
     }
 
-    const url = 'https://api.rossko.ru/service/v2/search?' + q;
+    const q = req.query.q || '';
+    const delivery_id = req.query.delivery_id || '';
+    const address_id = req.query.address_id || '';
 
-    const response = await fetch(url, {
-      agent: agent || undefined,
-      headers: {
-        'Authorization': `Basic ${ROSSKO_API_KEY}`,
-        'Content-Type': 'application/json'
-      },
-      timeout: 10000
-    });
+    const url = `https://api.rossko.ru/service/v2/search?text=${encodeURIComponent(
+      q
+    )}&delivery_id=${encodeURIComponent(delivery_id)}&address_id=${encodeURIComponent(address_id)}`;
 
-    const text = await response.text();
+    const headers = { 'X-Api-Key': API_KEY };
+    const options = { headers };
 
-    res.status(200).json({
-      ok: true,
-      status: response.status,
-      ctype: response.headers.get('content-type') || null,
-      snip: text.slice(0, 4000)
-    });
+    if (proxyUrl) {
+      options.agent = new HttpsProxyAgent(proxyUrl);
+    }
+
+    const r = await fetch(url, options);
+    const text = await r.text();
+
+    if (!r.ok) {
+      return res.status(200).json({
+        ok: false,
+        status: r.status,
+        error: text || `ROSSKO returned ${r.status}`
+      });
+    }
+
+    let data;
+    try {
+      data = JSON.parse(text);
+    } catch {
+      return res.status(200).json({
+        ok: false,
+        error: 'ROSSKO response is not JSON',
+        raw: text.slice(0, 200)
+      });
+    }
+
+    res.status(200).json({ ok: true, data });
   } catch (e) {
-    res.status(200).json({
-      ok: false,
-      error: String(e.message || e)
-    });
+    res.status(200).json({ ok: false, error: e.message });
   }
 };
