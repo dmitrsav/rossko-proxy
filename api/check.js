@@ -1,34 +1,30 @@
 const fetch = require('node-fetch');
 const { HttpsProxyAgent } = require('https-proxy-agent');
 
-const { PROXY_URL } = process.env;
-const agent = PROXY_URL ? new HttpsProxyAgent(PROXY_URL) : null;
+const proxyUrl = process.env.PROXY_URL;
 
 module.exports = async (req, res) => {
   try {
-    const { url } = req.query;
+    const url = req.query.url;
     if (!url) {
-      res.status(400).json({ ok: false, error: 'Missing url' });
-      return;
+      return res.status(400).json({ ok: false, error: 'Missing url param' });
     }
 
-    const response = await fetch(url, {
-      agent: agent || undefined,
-      timeout: 10000
-    });
+    const options = {};
+    if (proxyUrl) {
+      options.agent = new HttpsProxyAgent(proxyUrl);
+    }
 
-    const text = await response.text();
+    const r = await fetch(url, options);
+    const text = await r.text();
 
     res.status(200).json({
       ok: true,
-      status: response.status,
-      ctype: response.headers.get('content-type') || null,
-      snip: text.slice(0, 4000)
+      status: r.status,
+      ctype: r.headers.get('content-type'),
+      snip: text.slice(0, 200)
     });
   } catch (e) {
-    res.status(200).json({
-      ok: false,
-      error: String(e.message || e)
-    });
+    res.status(200).json({ ok: false, error: e.message });
   }
 };
