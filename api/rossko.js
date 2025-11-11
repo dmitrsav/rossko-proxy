@@ -1,50 +1,38 @@
-import { HttpsProxyAgent } from 'https-proxy-agent';
-import fetch from 'node-fetch';
+const fetch = require('node-fetch');
+const { getProxyOptions } = require('./_proxy');
 
-const ROSSCO_URL = 'https://api.rossko.ru/service/v2/search';
-const PROXY_URL = process.env.PROXY_URL;
+const ROSSKO_URL = 'https://api.rossko.ru/service/v2/search';
 
-const agent = PROXY_URL ? new HttpsProxyAgent(PROXY_URL) : null;
-
-export default async function handler(req, res) {
+module.exports = async (req, res) => {
   try {
     const { q, delivery_id, address_id } = req.query;
-
-    if (!q) {
-      return res.status(400).json({ ok: false, error: 'Missing q' });
+    if (!q || !delivery_id || !address_id) {
+      return res.status(400).json({ ok: false, error: 'Missing q/delivery_id/address_id' });
     }
 
-    const url = new URL(ROSSCO_URL);
-    url.searchParams.set('text', q);
-    if (delivery_id) url.searchParams.set('delivery_id', delivery_id);
-    if (address_id) url.searchParams.set('address_id', address_id);
+    const url = `${ROSSKO_URL}?text=${encodeURIComponent(q)}&delivery_id=${encodeURIComponent(
+      delivery_id
+    )}&address_id=${encodeURIComponent(address_id)}`;
 
-    const response = await fetch(url.toString(), {
-      // тут подставь свои реальные заголовки Rossko (ключ и т.п.)
+    const { agent, headers } = getProxyOptions();
+
+    const r = await fetch(url, {
+      agent,
       headers: {
+        ...headers,
         'Content-Type': 'application/json',
+        // сюда же, если нужно, ключи/заголовки Росско
+        // 'Authorization': '...'
       },
-      agent: agent || undefined,
+      method: 'GET'
     });
 
-    const text = await response.text();
+    const data = await r.text();
 
-    if (!response.ok) {
-      return res
-        .status(response.status)
-        .json({ ok: false, status: response.status, body: text });
-    }
-
-    let data;
-    try {
-      data = JSON.parse(text);
-    } catch {
-      data = text;
-    }
-
-    return res.status(200).json({ ok: true, data });
-  } catch (error) {
-    console.error('ROSSKO PROXY ERROR', error);
-    return res.status(500).json({ ok: false, error: String(error) });
+    res
+      .status(r.ok ? 200 : r.status)
+      .send(data);
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
   }
-}
+};
